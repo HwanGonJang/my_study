@@ -11,7 +11,7 @@
 #include <sys/select.h>
 
 #define PORT 8000
-#define MAX_MESSAGE_LEN 256
+#define MAX_MESSAGE_LEN 128
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct my_socket
@@ -32,12 +32,11 @@ void *read_with_timeout(void *arg)
     // Set 1ms timeout counter
     struct my_socket *socket = (struct my_socket *)arg;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 5000;
+    timeout.tv_usec = 0;
     while (1)
     {
         FD_ZERO(&readFds);
         FD_SET(socket->socket, &readFds);
-        // FD_SET(STDIN_FILENO, &readFds);
         select(socket->socket + 1, &readFds, NULL, NULL, &timeout);
 
         if (FD_ISSET(socket->socket, &readFds))
@@ -45,37 +44,80 @@ void *read_with_timeout(void *arg)
             rx_len = read(socket->socket, socket->buffer, MAX_MESSAGE_LEN);
             if (rx_len > 0)
             {
-                pthread_mutex_lock(&mutex);
                 printf("\r\033[K");
-                printf("%s \n", socket->buffer);
-                pthread_mutex_unlock(&mutex);
+                printf("%s\n", socket->buffer);
+
                 memset(socket->buffer, 0, MAX_MESSAGE_LEN);
             }
             else
             {
                 printf("Fail to read data\n");
-                return NULL;
+                break;
             }
         }
     }
     return NULL;
 }
 
-// char *input(char *buffer)
+char *input(char *buffer)
+{
+    int i = 0;
+    while (1)
+    {
+        printf("\r\033[K");
+        printf(">> %s", buffer);
+        int c = getchar();         // 문자 하나를 읽음
+        buffer[i++] = c;           // 입력 배열에 문자 추가
+        if (c == '\n' || c == EOF) // 줄바꿈 등의 이스케이프 문자를 넣어야 서버에서 바이트의 종료시점을 파악한다.
+        {                          // '\n' 또는 EOF(End Of File)를 만나면 입력 종료
+            break;
+        }
+    }
+    return buffer;
+}
+
+void *write_message(void *arg)
+{
+    struct my_socket *socket = (struct my_socket *)arg;
+    char *write_buffer = socket->write_buffer;
+    memset(write_buffer, 0, strlen(write_buffer));
+
+    // 닉네임 입력
+    // printf("Input your name\n");
+    // char name[20];
+    // input(name);
+    // write(socket->socket, name, 20);
+
+    while (1)
+    {
+        // printf("\r\033[K");
+        input(write_buffer);
+        if ((strncmp(write_buffer, "exit", 4)) == 0)
+        {
+            printf("\nClient exit...");
+            return NULL;
+        }
+        write(socket->socket, write_buffer, strlen(write_buffer));
+        memset(write_buffer, 0, strlen(write_buffer));
+    }
+}
+
+// void *render_screen(void *arg)
 // {
-//     int i = 0;
+//     struct my_socket *socket = (struct my_socket *)arg;
+//     int cnt = 0;
 //     while (1)
 //     {
-//         printf("\r\033[K");
-//         printf(">> %s", buffer);
-//         int c = getchar();         // 문자 하나를 읽음
-//         buffer[i++] = c;           // 입력 배열에 문자 추가
-//         if (c == '\n' || c == EOF) // 줄바꿈 등의 이스케이프 문자를 넣어야 서버에서 바이트의 종료시점을 파악한다.
-//         {                          // '\n' 또는 EOF(End Of File)를 만나면 입력 종료
-//             break;
+//         if ((socket->buffer)[0] != 0)
+//         {
+//             printf("\r\033[K");
+//             printf("%s \n", socket->buffer);
+//             memset(socket->buffer, 0, MAX_MESSAGE_LEN);
 //         }
+//         // printf("\r\033[K");s
+//         if (socket->write_buffer[0] != 0)
+//             printf(">> %s", socket->write_buffer);
 //     }
-//     return buffer;
 // }
 
 int main()
@@ -85,7 +127,7 @@ int main()
     // 클라이언트 소켓 생성
     client_socket = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in server_address;
-    pthread_t read_msg;
+    pthread_t read_msg, write_msg, render_msg;
 
     if (client_socket == -1)
     {
@@ -109,24 +151,17 @@ int main()
         exit(1);
     }
 
-    char *write_buffer = socket.write_buffer;
-    pthread_create(&read_msg, NULL, read_with_timeout, &socket);
-    memset(write_buffer, 0, strlen(write_buffer));
+    printf("Server connected: %s:%d\n", inet_ntoa(server_address.sin_addr), ntohs(server_address.sin_port));
 
-    while (1)
-    {
-        // printf("\r\033[K");
-        printf(">> ");
-        scanf("%s", write_buffer);
-        if ((strncmp(write_buffer, "exit", 4)) == 0)
-        {
-            printf("\nClient exit...");
-            return 0;
-        }
-        write(client_socket, write_buffer, strlen(write_buffer));
-        memset(write_buffer, 0, strlen(write_buffer));
-    }
+    pthread_create(&read_msg, NULL, read_with_timeout, &socket);
+    pthread_create(&write_msg, NULL, write_message, &socket);
+    // pthread_create(&render_msg, NULL, render_screen, &socket);
+
     // 클라이언트 소켓 닫기
+    // pthread_join(read_msg, NULL);
+    pthread_join(write_msg, NULL);
+    pthread_cancel(read_msg);
+    // pthread_cancel(render_msg);
     close(client_socket);
     return 0;
 }
