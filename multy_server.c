@@ -7,13 +7,14 @@
 
 #define MAX_CLIENTS 10
 #define PORT 8000
-#define MAX_MESSAGE_LEN 256
+#define MAX_MESSAGE_LEN 128
 struct connection *head = NULL;
 
 // 클라이언트 정보 구조체
 struct client_socket
 {
     int socket;
+    char *name;
     char *addr;
     int port;
     char buffer[MAX_MESSAGE_LEN];
@@ -49,33 +50,42 @@ struct connection *create_conenction(int client_fd, struct sockaddr_in addr)
 int free_connection(struct connection *close_connection)
 {
     printf("Server Removed connection: %s:%d \n", close_connection->client->addr, close_connection->client->port);
-    pthread_mutex_lock(&mutex);
+    // pthread_mutex_lock(&mutex);
     close(close_connection->client->socket);
     free(close_connection->client); // 소켓할당 제거
     free(close_connection);         // 커넥션 자원할당 제거
-    pthread_mutex_unlock(&mutex);
+    // pthread_mutex_unlock(&mutex);
     return 0;
 }
 
 int close_socket_connection()
 {
     struct connection *cur = head;
-    struct connection *before = cur;
-
-    // if (cur->next == NULL) //연결이 한개 밖에 없을 경우 head 값을 다시 NULL로 세팅
-    //     head = NULL;
-
+    struct connection *before = head;
+    // 단일 커넥션인 경우
+    if (cur->next == NULL)
+    {
+        if (cur->is_alive == 0)
+        {
+            printf(" head Server Removed connection: %s:%d \n", cur->client->addr, cur->client->port);
+            free(cur);
+            head = NULL;
+            return 0;
+        }
+    }
+    // 다중 커넥션인 경우
     while (cur != NULL)
     {
-
         if (cur->is_alive == 0) // 내 소켓이 아니고 연결이 살아있으면
         {
             before->next = cur->next; // 삭제 진행
-            free_connection(cur);
+            printf("Server Removed connection: %s:%d \n", cur->client->addr, cur->client->port);
             if (cur == head)
-            {
-                head = before->next;
-            }
+                head = cur->next;
+            close(cur->client->socket);
+            free(cur->client); // 소켓할당 제거
+            free(cur);         // 커넥션 자원할당 제거
+            break;
         }
 
         before = cur;
@@ -100,8 +110,11 @@ void *handle_client(void *arg)
     char *addr = client->addr;      // 클라이언트 주소
     int my_socket = client->socket; // 소켓
 
-    char msg[MAX_MESSAGE_LEN]; // 메시지 전송용 버퍼
-    ssize_t bytes_received;    // 전달 받은 데이터 크킥
+    char msg[256];          // 메시지 전송용 버퍼
+    ssize_t bytes_received; // 전달 받은 데이터 크킥
+
+    int firt_msg = 1;
+    char name[20];
 
     while (1)
     {
@@ -111,24 +124,32 @@ void *handle_client(void *arg)
         // 연결 종료시
         if (bytes_received <= 0)
         {
-            // pthread_mutex_lock(&mutex);
+            pthread_mutex_lock(&mutex);
             connection->is_alive = 0;
             close_socket_connection(); // 연결 종료할 경우 커넥션 자원 수거
-            // pthread_mutex_lock(&mutex);
-            break;
+            pthread_mutex_unlock(&mutex);
+            return NULL;
         }
-
-        sprintf(msg, "%s: %s", addr, client->buffer); // 전송자 데이터 포함 메시지 생성
-        printf("Received from: %s:%d : %s \n", addr, port, msg);
+        if (firt_msg > 0)
+        {
+            strcpy(name, client->buffer);
+            printf("%s %lu\n", name, strlen(name));
+            sprintf(msg, "%s 님이 입장하셨습니다.", name);
+            firt_msg = 0;
+        }
+        else
+        {
+            sprintf(msg, "%s: %s >> %s", name, addr, client->buffer); // 전송자 데이터 포함 메시지 생성
+        }
+        printf("Received from: %s:%d  %s \n", addr, port, msg);
 
         struct connection *cur = head; // 커넥션 연결 리스트의 헤드
 
         // 다른 클라이언트들에게 메시지 전송
         while (cur != NULL)
         {
+            pthread_mutex_lock(&mutex);
             struct client_socket *now_client = cur->client;
-            // printf("hello: %d %d  %s \n", now_client->socket, my_socket, now_client->addr);
-
             if ((now_client->socket != my_socket) && (cur->is_alive > 0)) // 내 소켓이 아니고 연결이 살아있으면
             {
                 write(cur->client->socket, msg, MAX_MESSAGE_LEN); // msg 전송
@@ -136,6 +157,7 @@ void *handle_client(void *arg)
                 printf("Send to %s:%d msg:%s \n", addr, send_port, msg);
             }
             cur = cur->next;
+            pthread_mutex_unlock(&mutex);
         }
 
         memset(client->buffer, 0, strlen(client->buffer));
@@ -171,6 +193,7 @@ int main()
     while (1)
     {
         // 클라이언트 연결 대기
+        printf("main thread runs\n");
         client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len); // 클라이언트 커넥션 할당
         if (client_socket > 0)
         {
@@ -189,6 +212,7 @@ int main()
                 pthread_mutex_unlock(&mutex);
             }
             // 멀티 채팅을 위한 스레드 생성
+
             pthread_create(&client_threads[num_clients++], NULL, handle_client, new_connection);
         }
     }
