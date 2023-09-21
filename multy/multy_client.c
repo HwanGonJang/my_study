@@ -4,7 +4,6 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <pthread.h>
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -12,7 +11,6 @@
 
 #define PORT 8000
 #define MAX_MESSAGE_LEN 128
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 struct termios initial_settings, new_settings;
 
 struct my_socket
@@ -66,9 +64,6 @@ void read_socket(int fd, char *read_buffer)
     timeout.tv_usec = 1000;
     memset(read_buffer, 0, MAX_MESSAGE_LEN);
 
-    // int flags = fcntl(STDIN_FILENO, F_GETFL);
-    // fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
-
     // while (1)
     // {
     FD_ZERO(&readFds);
@@ -80,10 +75,8 @@ void read_socket(int fd, char *read_buffer)
     {
         if (read(fd, read_buffer, MAX_MESSAGE_LEN) > 0)
         {
-            pthread_mutex_lock(&mutex);
             printf("\r\033[K");
             printf("%s\n", read_buffer);
-            pthread_mutex_unlock(&mutex);
             memset(read_buffer, 0, MAX_MESSAGE_LEN);
         }
         else
@@ -100,7 +93,6 @@ void read_input(int fd, char *write_buffer, char *letter_bytes, char *letter_ind
         0,
     };
 
-    // pthread_mutex_lock(&mutex);
     ssize_t rx_len = read(STDIN_FILENO, input, 3);
 
     if (rx_len > 0)
@@ -115,6 +107,8 @@ void read_input(int fd, char *write_buffer, char *letter_bytes, char *letter_ind
         else if (first_ch == '\n')
         {
             send_msg(fd, write_buffer);
+            if (strcmp(write_buffer, "exit") == 0)
+                exit(0);
             memset(write_buffer, 0, MAX_MESSAGE_LEN);
             memset(letter_bytes, 0, MAX_MESSAGE_LEN);
 
@@ -139,6 +133,10 @@ void run(struct my_socket socket)
     char letter_bytes[128] = {
         0,
     };
+
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+
     while (1)
     {
         printf("\r\033[K");
@@ -146,8 +144,6 @@ void run(struct my_socket socket)
         fflush(stdout);
         read_input(socket.fd, socket.write_buffer, letter_bytes, &letter_index, &byte_len);
         read_socket(socket.fd, socket.read_buffer);
-        if (strcmp(socket.write_buffer, "exit") == 0)
-            break;
     }
 }
 
@@ -199,13 +195,5 @@ int main()
     char name[20] = "jmj";
     write(socket.fd, name, strlen(name));
     run(socket);
-    // pthread_create(&read_msg, NULL, read_socket, &socket);
-    // pthread_join(read_msg, NULL);
-    // return EXIT_SUCCESS;
+    close(client_socket);
 }
-
-// 클라이언트 소켓 닫기
-// pthread_cancel(read_msg);
-// close(client_socket);
-// return 0;
-// }
