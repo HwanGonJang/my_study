@@ -28,6 +28,18 @@ void reset_terminal()
     tcsetattr(STDIN_FILENO, TCSANOW, &initial_settings);
 }
 
+void back_space(char *write_buffer, char word_length[MAX_MESSAGE_LEN], int *word_cnt, int *index)
+{
+    for (int i = 0; i < word_length[*word_cnt]; i++)
+    {
+        write_buffer[*index - 1] = '\0';
+
+        if (index > 0)
+            *index--;
+    }
+    *word_cnt--;
+}
+
 void *read_with_timeout(void *arg)
 {
     int rx_len, wx_len = 0;
@@ -37,15 +49,16 @@ void *read_with_timeout(void *arg)
     // recive time out config
     // Set 1ms timeout counter
     struct my_socket *socket = (struct my_socket *)arg;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 5000;
     memset(socket->buffer, 0, MAX_MESSAGE_LEN);
     memset(socket->write_buffer, 0, MAX_MESSAGE_LEN);
 
     int flags = fcntl(STDIN_FILENO, F_GETFL);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    char word_length[128];
     int index = 0;
-    char unicode[20];
+    int word_cnt = 0;
 
     while (1)
     {
@@ -53,6 +66,7 @@ void *read_with_timeout(void *arg)
         FD_SET(STDIN_FILENO, &readFds);
         FD_SET(socket->socket, &readFds);
         select(socket->socket + 1, &readFds, NULL, NULL, &timeout);
+
         printf("\r\033[K");
         printf("\r>> %s", socket->write_buffer);
         fflush(stdout);
@@ -63,7 +77,8 @@ void *read_with_timeout(void *arg)
             if (rx_len > 0)
             {
                 pthread_mutex_lock(&mutex);
-                printf("\n%s\n", socket->buffer);
+                printf("\r\033[K");
+                printf("%s\n", socket->buffer);
                 pthread_mutex_unlock(&mutex);
                 memset(socket->buffer, 0, MAX_MESSAGE_LEN);
             }
@@ -73,26 +88,52 @@ void *read_with_timeout(void *arg)
                 exit(0);
             }
         }
-        if (FD_ISSET(STDIN_FILENO, &readFds))
-        {
-            pthread_mutex_lock(&mutex);
+        // if (FD_ISSET(STDIN_FILENO, &readFds))
+        // {
+        char input[3] = {
+            0,
+        };
+        pthread_mutex_lock(&mutex);
 
-            rx_len = read(STDERR_FILENO, unicode, 5);
-            if ((c != '\n'))
-                printf("key got: %s\n", c);
-            // socket->write_buffer[index++] = c;
-            // else
-            // {
-            //     if (strcmp(socket->write_buffer, "exit") == 0)
-            //         break;
-            //     write(socket->socket, socket->write_buffer, index);
-            //     memset(socket->write_buffer, 0, MAX_MESSAGE_LEN);
-            //     index = 0;
-            // }
-            pthread_mutex_unlock(&mutex);
-            // }
+        rx_len = read(STDIN_FILENO, input, 3);
+
+        if (rx_len > 0)
+        {
+            if (input[0] == 127)
+            {
+                for (int i = 0; i < word_length[word_cnt]; i++)
+                {
+                    socket->write_buffer[index - 1] = '\0';
+
+                    if (index > 0)
+                        index--;
+                }
+                word_cnt--;
+            }
+
+            else if (input[0] == '\n')
+            {
+                if (strcmp(socket->write_buffer, "exit") == 0)
+                    break;
+                write(socket->socket, socket->write_buffer, index);
+                memset(socket->write_buffer, 0, MAX_MESSAGE_LEN);
+                memset(word_length, 0, MAX_MESSAGE_LEN);
+                index, word_cnt = 0;
+            }
+
+            else
+            {
+                for (int i = 0; i < rx_len; i++)
+                {
+                    socket->write_buffer[index++] = input[i];
+                }
+                word_length[word_cnt++] = rx_len;
+            }
         }
+        pthread_mutex_unlock(&mutex);
     }
+    // }
+    // }
     return NULL;
 }
 
