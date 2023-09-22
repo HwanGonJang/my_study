@@ -6,7 +6,7 @@
 #include <arpa/inet.h>
 
 #define MAX_CLIENTS 10
-#define PORT 8000
+#define PORT 8080
 #define MAX_MESSAGE_LEN 128
 struct connection *head = NULL;
 
@@ -95,6 +95,24 @@ int close_socket_connection()
     return 0;
 }
 
+void send_msg(int my_socket, char *addr, char *msg)
+{
+    struct connection *cur = head; // 커넥션 연결 리스트의 헤드
+    while (cur != NULL)
+    {
+        pthread_mutex_lock(&mutex);
+        struct client_socket *now_client = cur->client;
+        if ((now_client->socket != my_socket) && (cur->is_alive > 0)) // 내 소켓이 아니고 연결이 살아있으면
+        {
+            write(cur->client->socket, msg, MAX_MESSAGE_LEN); // msg 전송
+            int send_port = cur->client->port;
+            printf("Send to %s:%d msg:%s \n", addr, send_port, msg);
+        }
+        cur = cur->next;
+        pthread_mutex_unlock(&mutex);
+    }
+}
+
 void *handle_client(void *arg)
 {
 
@@ -113,10 +131,11 @@ void *handle_client(void *arg)
     char msg[256];          // 메시지 전송용 버퍼
     ssize_t bytes_received; // 전달 받은 데이터 크킥
 
-    int firt_msg = 1;
+    char firt_msg = 1;
+
     char name[20];
 
-    while (1)
+    while (connection->is_alive)
     {
         // 소켓 데이터 읽기
         bytes_received = read(my_socket, client->buffer, MAX_MESSAGE_LEN);
@@ -124,45 +143,30 @@ void *handle_client(void *arg)
         // 연결 종료시
         if (bytes_received <= 0)
         {
-            pthread_mutex_lock(&mutex);
             connection->is_alive = 0;
-            close_socket_connection(); // 연결 종료할 경우 커넥션 자원 수거
-            pthread_mutex_unlock(&mutex);
-            return NULL;
+            sprintf(msg, "%s 님이 나갔습니다.", name);
         }
-        if (firt_msg > 0)
+        else if (firt_msg)
         {
-            strcpy(name, client->buffer);
+            strcpy(name, client->buffer); // 닉네임 저장
             printf("%s %lu\n", name, strlen(name));
             sprintf(msg, "%s 님이 입장하셨습니다.", name);
             firt_msg = 0;
         }
-        else
+        else if (connection->is_alive)
         {
+            printf("Received from: %s:%d  %s \n", addr, port, client->buffer);
             sprintf(msg, "%s: %s >> %s", name, addr, client->buffer); // 전송자 데이터 포함 메시지 생성
         }
-        printf("Received from: %s:%d  %s \n", addr, port, msg);
 
-        struct connection *cur = head; // 커넥션 연결 리스트의 헤드
-
-        // 다른 클라이언트들에게 메시지 전송
-        while (cur != NULL)
-        {
-            pthread_mutex_lock(&mutex);
-            struct client_socket *now_client = cur->client;
-            if ((now_client->socket != my_socket) && (cur->is_alive > 0)) // 내 소켓이 아니고 연결이 살아있으면
-            {
-                write(cur->client->socket, msg, MAX_MESSAGE_LEN); // msg 전송
-                int send_port = cur->client->port;
-                printf("Send to %s:%d msg:%s \n", addr, send_port, msg);
-            }
-            cur = cur->next;
-            pthread_mutex_unlock(&mutex);
-        }
-
+        send_msg(my_socket, addr, msg); // 다른 클라이언트들에게 메시지 전송
         memset(client->buffer, 0, strlen(client->buffer));
         memset(msg, 0, strlen(msg)); // msg 버퍼를 비워준다.
     }
+
+    pthread_mutex_lock(&mutex);
+    close_socket_connection(); // 연결 종료할 경우 커넥션 자원 수거
+    pthread_mutex_unlock(&mutex);
 
     return NULL;
 }
@@ -193,7 +197,7 @@ int main()
     while (1)
     {
         // 클라이언트 연결 대기
-        printf("main thread runs\n");
+        // printf("main thread runs\n");
         client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len); // 클라이언트 커넥션 할당
         if (client_socket > 0)
         {
